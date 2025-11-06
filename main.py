@@ -6,7 +6,7 @@ from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.cluster import KMeans
-# Eliminamos 'from kneed import KneeLocator' para solucionar el ModuleNotFoundError.
+# No usamos kneed, evitamos el ModuleNotFoundError.
 
 import warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
@@ -17,8 +17,11 @@ GITHUB_EXCEL_URL = (
     "https://raw.githubusercontent.com/JIEcol/Clustering-Construccion-/main/mapa_3y4_cs_v2_sep25.xlsx"
 )
 
-st.title("🏗️ Análisis de Clustering para Proyectos de Construcción")
+st.set_page_config(layout="wide") # Para que se vea mejor
+st.title("🏗️ Análisis de Clustering (K-Means) de Proyectos de Construcción")
 st.markdown("---")
+st.markdown("**¡Cargando y Preparando las 7 Dimensiones de Datos!**")
+
 
 @st.cache_data
 def load_data(url):
@@ -26,24 +29,23 @@ def load_data(url):
     try:
         df = pd.read_excel(url, engine='openpyxl')
         
-        # Relleno de NaN y coerción de tipo para todas las variables numéricas esperadas
-        # Asegúrate de que el nombre de tus columnas sea exacto
+        # Lista de todas las columnas numéricas esperadas para limpiar NaNs con la media
         numeric_cols_to_clean = [
-            'longitud', 'latitud', 'area_lote', 'area_construida', 'area_vendible', 
-            'numero_etapas', 'numero_unidades', 'numero_bloques', 'total_parqueaderos', 
+            'longitud', 'latitud', 'numero_etapas', 'numero_unidades', 'area_lote', 
+            'area_construida', 'area_vendible', 'numero_bloques', 'total_parqueaderos', 
             '#_parqueaderos_propietarios', '#_parqueaderos_visitantes',
-            # Nuevas variables D5 y D6 (asumiendo que ya están consolidadas a nivel P)
+            # D5 y D6 Numéricas
             'precioenmiles', 'preciomc', 'saldo', 'ventas', 'renuncias', 
             'area_por_tipo', 'alcobas', 'baños'
         ]
         
         for col in numeric_cols_to_clean:
             if col in df.columns:
-                # Convertir a numérico, rellenar NaNs con la media de la columna
                 df[col] = pd.to_numeric(df[col], errors='coerce')
-                df[col] = df[col].fillna(df[col].mean())
+                # Reemplazamos NaNs con la media para evitar problemas en el escalado
+                df[col] = df[col].fillna(df[col].mean()) 
             
-        # Rellenar NaN en categóricas con 'Missing' o 'N/A'
+        # Rellenar NaN en categóricas con 'N/A' para el OHE
         for col in df.select_dtypes(include=['object', 'category']).columns:
              df[col] = df[col].fillna('N/A')
              
@@ -57,7 +59,8 @@ df_raw = load_data(GITHUB_EXCEL_URL)
 if df_raw is None:
     st.stop()
 else:
-    st.success("✅ Archivo cargado y listo para el preprocesamiento con las nuevas dimensiones.")
+    st.success(f"✅ Archivo cargado. {df_raw.shape[0]} filas y {df_raw.shape[1]} columnas disponibles.")
+
 
 # --- 1. Definición de Variables (Dimensiones 1-7) ---
 
@@ -76,18 +79,17 @@ quality_categorical = [
 amenities_columns = [col for col in df_raw.columns if col.startswith('zonacomun')]
 market_categorical = amenities_columns + ['marca', 'insumos', 'destino', 'uso_general']
 
-
-# D5: Atributos Transaccionales (Nuevas variables)
-# ASUMIMOS que 'fecha' ya fue transformada a una métrica numérica de tiempo, ej: 'antiguedad_dato'
+# D5: Atributos Transaccionales
+# Omitimos 'fecha' asumiendo que ya fue transformada o no está presente.
 transactional_numerical = ['precioenmiles', 'preciomc', 'saldo', 'ventas', 'renuncias']
-transactional_categorical = ['fase', 'estado', 'modalidad'] # Asumimos OHE de la fase/estado predominante
+transactional_categorical = ['fase', 'estado', 'modalidad'] 
 
-# D6: Características de Diseño (Nuevas variables)
-design_numerical = ['area_por_tipo', 'alcobas', 'baños'] # Promedio Ponderado
+# D6: Características de Diseño
+design_numerical = ['area_por_tipo', 'alcobas', 'baños']
 design_categorical = ['uso', 'tipo_vivienda', 'nombre_tipo'] 
-dotaciones_categorical = [col for col in df_raw.columns if col.startswith('dotaciones_asociadas')] # Asumimos OHE por dotación
+dotaciones_categorical = [col for col in df_raw.columns if col.startswith('dotaciones_asociadas')] 
 
-# D7: Calidad y Lujo de Acabados (Nuevas variables)
+# D7: Calidad y Lujo de Acabados
 finishes_categorical = [
     'condicion_entrega', 'meson_cocina', 'muebles_cocina', 
     'pisos_alcobas', 'pisos_baño', 'pisos_cocina', 
@@ -110,18 +112,18 @@ numerical_features = [col for col in numerical_features if col in df_raw.columns
 categorical_features = [col for col in categorical_features if col in df_raw.columns]
 
 st.info(
-    f"Total de Dimensiones de entrada: **{len(numerical_features)}** numéricas, "
-    f"**{len(categorical_features)}** categóricas."
+    f"Se usarán **{len(numerical_features)}** variables numéricas (Estandarización) y "
+    f"**{len(categorical_features)}** variables categóricas (One-Hot Encoding)."
 )
 
 # --- 2. Pipeline de Preprocesamiento ---
 
-# Paso 1: Escalado Numérico
+# Escalado Numérico (Estandarización)
 numerical_transformer = Pipeline(steps=[
     ('scaler', StandardScaler())
 ])
 
-# Paso 2: Transformación Categórica
+# Transformación Categórica (One-Hot Encoding)
 categorical_transformer = Pipeline(steps=[
     ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=False))
 ])
@@ -137,9 +139,9 @@ preprocessor = ColumnTransformer(
 
 # --- 3. Ejecución y Visualización del Clustering ---
 
-# 3.1. Método del Codo (Elbow Method) - Sin kneed
+# 3.1. Método del Codo
 st.subheader("1. Determinación de K (Método del Codo)")
-k_range = st.slider("Selecciona un rango máximo para K", 2, 20, 10)
+k_range = st.slider("Selecciona el rango máximo de K a evaluar:", 2, 20, 10)
 
 @st.cache_data(show_spinner="Calculando WCSS para el método del codo...")
 def run_elbow_method(df_data, preprocessor, max_k):
@@ -159,28 +161,30 @@ def run_elbow_method(df_data, preprocessor, max_k):
 
 k_values, wcss = run_elbow_method(df_raw, preprocessor, k_range)
 
-# Plotear el resultado (Manual)
-fig, ax = plt.subplots(figsize=(8, 4))
-ax.plot(k_values, wcss, 'bx-')
-ax.set_xlabel("Número de Clústeres (K)")
-ax.set_ylabel("WCSS")
-ax.set_title("Método del Codo para Encontrar K Óptimo")
-st.pyplot(fig)
+col1, col2 = st.columns([2, 1])
 
-st.write("Observa el gráfico y elige el punto donde la curva se 'dobla' significativamente. Por defecto sugeriremos 4, pero tú puedes elegir otro valor.")
+with col1:
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.plot(k_values, wcss, 'bx-')
+    ax.set_xlabel("Número de Clústeres (K)")
+    ax.set_ylabel("WCSS (Varianza Intra-Clúster)")
+    ax.set_title("Método del Codo")
+    st.pyplot(fig)
 
-# 3.2. Ejecución de K-Means
-st.subheader("2. Ejecución y Resultados del Clustering")
+with col2:
+    st.markdown("#### Interpretación del Codo:")
+    st.info("El 'codo' es el punto donde el descenso del WCSS comienza a ser marginal. Elige un K justo antes de que la curva se aplane.")
+    selected_k = st.number_input(
+        "Selecciona el número de Clústeres (K) a usar:", 
+        min_value=2, 
+        max_value=20, 
+        value=4, 
+        step=1
+    )
 
-selected_k = st.number_input(
-    "Selecciona el número de Clústeres (K) a usar:", 
-    min_value=2, 
-    max_value=20, 
-    value=4, 
-    step=1
-)
+# 3.2. Ejecución de K-Means y Análisis
 
-if st.button(f"Ejecutar K-Means con K={selected_k}"):
+if st.button(f"🚀 Ejecutar K-Means y Segmentar con K={selected_k}", type="primary"):
 
     @st.cache_data(show_spinner=f"Entrenando K-Means con {selected_k} clústeres...")
     def run_kmeans_clustering(df_data, preprocessor, k):
@@ -196,42 +200,46 @@ if st.button(f"Ejecutar K-Means con K={selected_k}"):
     
     df_clustered = run_kmeans_clustering(df_raw.copy(), preprocessor, selected_k)
     
-    st.success(f"Clustering completado. Se crearon {selected_k} clústeres. ¡Trabajo hecho!")
+    st.success(f"Clustering completado. Se crearon {selected_k} segmentos de mercado.")
 
     # A. Distribución de Proyectos por Clúster
-    st.markdown("### A. Distribución de Proyectos por Clúster")
+    st.subheader("1. Distribución de Proyectos")
     cluster_counts = df_clustered['Cluster'].value_counts().sort_index()
     st.dataframe(cluster_counts.rename("N° Proyectos"))
 
-    # B. Análisis de Centroides (Resumen de Características)
-    st.markdown("### B. Análisis de Centroides (Perfil del Clúster)")
+    # B. Análisis de Centroides
+    st.subheader("2. Perfil de los Clústeres (Centroides)")
     
     st.markdown("#### Promedios de Variables Numéricas")
-    # Mostrar promedios de las NUEVAS y viejas numéricas
     all_numeric_cols = list(set(numerical_features) & set(df_clustered.columns))
     numeric_summary = df_clustered.groupby('Cluster')[all_numeric_cols].mean().T
-    st.dataframe(numeric_summary.style.background_gradient(cmap='viridis', axis=1))
+    st.dataframe(
+        numeric_summary.style.background_gradient(cmap='viridis', axis=1), 
+        caption="Valores promedio (sin desescalar) de las métricas de cada clúster."
+    )
 
-    # Resumen de variables categóricas clave (incluyendo VIS/No VIS y Acabados)
-    st.markdown("#### Categorías Más Frecuentes (Moda) por Clúster")
+    st.markdown("#### Categorías Más Frecuentes (Moda)")
     key_categorical_summary = [
         'estrato', 'tipo_vivienda', 'condicion_entrega', 
-        'uso_general', 'meson_cocina', 'ventas' 
+        'uso_general', 'meson_cocina', 'regional'
     ]
     categorical_summary_dict = {}
     for col in key_categorical_summary:
         if col in df_clustered.columns:
-            # Calcular la moda (valor más frecuente) para cada clúster
             modes = df_clustered.groupby('Cluster')[col].agg(lambda x: x.mode()[0] if not x.mode().empty else 'N/A')
             categorical_summary_dict[col] = modes
     
     if categorical_summary_dict:
-        st.dataframe(pd.DataFrame(categorical_summary_dict).T)
+        st.dataframe(
+            pd.DataFrame(categorical_summary_dict).T,
+            caption="Valores más comunes (Moda) de las categorías clave."
+        )
 
     # C. Descargar los resultados
+    st.markdown("---")
     csv = df_clustered.to_csv(index=False).encode('utf-8')
     st.download_button(
-        label="Descargar DataFrame con Etiquetas de Clúster",
+        label="📥 Descargar DataFrame con Etiquetas de Clúster",
         data=csv,
         file_name='proyectos_clusterizados_final.csv',
         mime='text/csv',
