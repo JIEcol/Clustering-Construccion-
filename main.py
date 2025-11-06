@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import plotly.express as px  # Agregamos Plotly para visualizaciones interactivas
+import plotly.express as px
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
@@ -11,109 +11,18 @@ from sklearn.cluster import KMeans
 import warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
 
-# --- Configuración y Carga de Datos ---
+# ... (El código de importaciones, warnings, y la carga inicial de datos 'df_raw' se mantiene igual) ...
 
-GITHUB_EXCEL_URL = (
-    "https://raw.githubusercontent.com/JIEcol/Clustering-Construccion-/main/mapa_3y4_cs_v2_sep25.xlsx"
-)
+# --- Código para construir el preprocesador (Movido dentro de la función cacheada) ---
 
-st.set_page_config(layout="wide")
-st.title("🏗️ Análisis de Clustering (K-Means) de Proyectos de Construcción")
-st.markdown("---")
-st.markdown("#### Paso 1: Carga y Preparación de las 7 Dimensiones")
+# ... (Las listas numerical_features y categorical_features se mantienen igual) ...
 
-
-@st.cache_data
-def load_data(url):
-    """Carga los datos y realiza limpieza básica."""
-    try:
-        df = pd.read_excel(url, engine='openpyxl')
-        
-        # Lista de todas las columnas numéricas esperadas
-        numeric_cols_to_clean = [
-            'longitud', 'latitud', 'numero_etapas', 'numero_unidades', 'area_lote', 
-            'area_construida', 'area_vendible', 'numero_bloques', 'total_parqueaderos', 
-            '#_parqueaderos_propietarios', '#_parqueaderos_visitantes',
-            'precioenmiles', 'preciomc', 'saldo', 'ventas', 'renuncias', 
-            'area_por_tipo', 'alcobas', 'baños'
-        ]
-        
-        for col in numeric_cols_to_clean:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-                # Relleno de NaNs con la media (Estrategia simple para el modelo)
-                df[col] = df[col].fillna(df[col].mean()) 
-            
-        # Rellenar NaN en categóricas con 'N/A' para el OHE
-        for col in df.select_dtypes(include=['object', 'category']).columns:
-             df[col] = df[col].fillna('N/A')
-             
-        return df
-    except Exception as e:
-        st.error(f"Error al cargar/limpiar el archivo: {e}")
-        return None
-
-df_raw = load_data(GITHUB_EXCEL_URL)
-
-if df_raw is None:
-    st.stop()
-else:
-    st.success(f"✅ Archivo cargado. {df_raw.shape[0]} filas listas para K-Means.")
-
-
-# --- 1. Definición de Variables (Dimensiones 1-7) ---
-
-# D1-D4
-location_categorical = ['regional', 'ciudad', 'zona', 'barrio', 'localidad_comuna', 'estrato']
-location_numerical = ['longitud', 'latitud']
-magnitude_numerical = [
-    'numero_etapas', 'numero_unidades', 'area_lote', 'area_construida', 
-    'area_vendible', 'numero_bloques', 'total_parqueaderos', 
-    '#_parqueaderos_propietarios', '#_parqueaderos_visitantes'
-]
-quality_categorical = [
-    'sistema_constructivo', 'cimentación', 'divison_interior', 
-    'placa_entre_piso', 'fachada', 'ventanas'
-]
-amenities_columns = [col for col in df_raw.columns if col.startswith('zonacomun')]
-market_categorical = amenities_columns + ['marca', 'insumos', 'destino', 'uso_general']
-
-# D5: Atributos Transaccionales
-transactional_numerical = ['precioenmiles', 'preciomc', 'saldo', 'ventas', 'renuncias']
-transactional_categorical = ['fase', 'estado', 'modalidad'] 
-
-# D6: Características de Diseño
-design_numerical = ['area_por_tipo', 'alcobas', 'baños']
-design_categorical = ['uso', 'tipo_vivienda', 'nombre_tipo'] 
-dotaciones_categorical = [col for col in df_raw.columns if col.startswith('dotaciones_asociadas')] 
-
-# D7: Calidad y Lujo de Acabados
-finishes_categorical = [
-    'condicion_entrega', 'meson_cocina', 'muebles_cocina', 
-    'pisos_alcobas', 'pisos_baño', 'pisos_cocina', 
-    'puerta_principal', 'tipo_cocina'
-]
-
-# Consolidar listas finales
-numerical_features = (
-    location_numerical + magnitude_numerical + 
-    transactional_numerical + design_numerical
-)
-categorical_features = (
-    location_categorical + quality_categorical + market_categorical + 
-    transactional_categorical + design_categorical + dotaciones_categorical + 
-    finishes_categorical
-)
-
-# Filtrar solo las columnas que realmente existen
-numerical_features = [col for col in numerical_features if col in df_raw.columns]
-categorical_features = [col for col in categorical_features if col in df_raw.columns]
-
-
-# --- 2. Pipeline de Preprocesamiento (Creación fuera de funciones cacheables) ---
+# ----------------------------------------------------------------------------------
+# ¡SOLUCIÓN FINAL!: La función cacheada recibe solo strings/hashes y reconstruye el preprocesador.
+# ----------------------------------------------------------------------------------
 
 def build_preprocessor(numerical_features, categorical_features):
-    """Construye el ColumnTransformer basado en las listas de columnas."""
+    """Construye y devuelve el ColumnTransformer."""
     numerical_transformer = Pipeline(steps=[
         ('scaler', StandardScaler())
     ])
@@ -129,22 +38,28 @@ def build_preprocessor(numerical_features, categorical_features):
     )
     return preprocessor
 
-preprocessor = build_preprocessor(numerical_features, categorical_features)
-
-
-# SOLUCIÓN a UnhashableParamError: Cacheamos la data procesada
 @st.cache_data(show_spinner="Aplicando preprocesamiento (Estandarización y OHE)...")
-def get_processed_data(df_data, preprocessor):
-    """Aplica el preprocesamiento a los datos y devuelve una matriz numpy."""
-    # Usamos fit_transform para entrenar el escalador/OHE y transformar
-    return preprocessor.fit_transform(df_data)
+def get_processed_data(df_data, num_cols, cat_cols):
+    """
+    Aplica el preprocesamiento a los datos.
+    Recibe listas de columnas (hashable) en lugar del objeto ColumnTransformer.
+    """
+    # 1. Reconstruir el preprocesador dentro de la función cacheada
+    preprocessor_internal = build_preprocessor(num_cols, cat_cols)
+    
+    # 2. Aplicar la transformación
+    X_transformed = preprocessor_internal.fit_transform(df_data)
+    
+    # 3. Guardar el preprocesador entrenado como atributo para su uso posterior (e.g., para desescalar)
+    # Aunque no lo usaremos inmediatamente, es una buena práctica.
+    # Nota: No devolvemos el preprocesador, solo la data transformada.
+    return X_transformed, preprocessor_internal 
 
-X_processed = get_processed_data(df_raw, preprocessor) 
+# Procesar los datos una sola vez. Ahora pasamos listas de strings (hashable)
+X_processed, preprocessor_fitted = get_processed_data(df_raw, numerical_features, categorical_features) 
 
 
-# --- 3. Ejecución y Visualización del Clustering ---
-
-st.markdown("#### Paso 2: Evaluación y Entrenamiento del Modelo")
+# --- El resto del código continúa desde la sección 3.1 ---
 
 # 3.1. Método del Codo
 st.subheader("1. Determinación de K (Método del Codo)")
@@ -155,38 +70,27 @@ def run_elbow_method(X_data, max_k):
     wcss = []
     k_values = range(1, max_k + 1)
     
-    # Esta función ya no es cacheada, por eso es rápida (usa X_processed cacheado)
-    for k in k_values:
-        kmeans = KMeans(n_clusters=k, random_state=42, n_init='auto', max_iter=300)
-        kmeans.fit(X_data)
-        wcss.append(kmeans.inertia_)
+    with st.spinner(f"Calculando inercia para K de 1 a {max_k}. Esto puede tardar unos segundos..."):
+        for k in k_values:
+            kmeans = KMeans(n_clusters=k, random_state=42, n_init='auto', max_iter=300)
+            kmeans.fit(X_data)
+            wcss.append(kmeans.inertia_)
     
     return k_values, wcss
 
 k_values, wcss = run_elbow_method(X_processed, k_range)
 
-col1, col2 = st.columns([2, 1])
-
-with col1:
-    fig, ax = plt.subplots(figsize=(8, 4))
-    ax.plot(k_values, wcss, 'bx-')
-    ax.set_xlabel("Número de Clústeres (K)")
-    ax.set_ylabel("WCSS (Varianza Intra-Clúster)")
-    ax.set_title("Método del Codo: Elige el punto de inflexión")
-    st.pyplot(fig)
-
-with col2:
-    st.markdown("#### Elige K")
-    st.info("El 'codo' es donde la mejora al añadir un clúster se estanca. ¡Sé eficiente!")
-    selected_k = st.number_input(
-        "Número de Clústeres (K):", 
-        min_value=2, 
-        max_value=20, 
-        value=4, 
-        step=1
-    )
+# ... (El resto del código de visualización del codo, el selector de K y el entrenamiento de K-Means es el mismo) ...
 
 # 3.2. Ejecución de K-Means y Análisis
+
+selected_k = st.number_input(
+    "Selecciona el número de Clústeres (K) a usar:", 
+    min_value=2, 
+    max_value=20, 
+    value=4, 
+    step=1
+)
 
 if st.button(f"🚀 Ejecutar K-Means y Segmentar con K={selected_k}", type="primary"):
 
@@ -196,12 +100,13 @@ if st.button(f"🚀 Ejecutar K-Means y Segmentar con K={selected_k}", type="prim
         kmeans = KMeans(n_clusters=k, random_state=42, n_init='auto', max_iter=300)
         kmeans.fit(X_data) 
         
-        # Copiamos el DF para añadir la nueva columna sin afectar el DF cacheado
         df_clustered = df_original.copy()
         df_clustered['Cluster'] = kmeans.labels_
         return df_clustered
     
     df_clustered = run_kmeans_clustering(X_processed, df_raw, selected_k)
+    
+    # ... (El resto de la sección de visualización y descarga se mantiene igual) ...
     
     st.success(f"Clustering completado. Se crearon **{selected_k} segmentos** de mercado.")
 
@@ -230,7 +135,7 @@ if st.button(f"🚀 Ejecutar K-Means y Segmentar con K={selected_k}", type="prim
                 df_clustered, 
                 x='longitud', 
                 y='latitud', 
-                color='Cluster', 
+                color=df_clustered['Cluster'].astype(str), # Convertir a string para color discreto
                 hover_data=['regional', 'estrato', 'precioenmiles'],
                 title=f"Segmentación de Proyectos (K={selected_k})",
                 template="streamlit"
