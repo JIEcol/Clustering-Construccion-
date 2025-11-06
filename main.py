@@ -11,7 +11,7 @@ from sklearn.cluster import KMeans
 import warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
 
-# --- Configuración y Carga de Datos (Incluye manejo robusto de errores) ---
+# --- Configuración y Carga de Datos ---
 
 GITHUB_EXCEL_URL = (
     "https://raw.githubusercontent.com/JIEcol/Clustering-Construccion-/main/mapa_3y4_cs_v2_sep25.xlsx"
@@ -29,7 +29,7 @@ def load_data(url):
     try:
         df = pd.read_excel(url, engine='openpyxl')
         
-        # Lista de todas las columnas numéricas esperadas
+        # Lista de todas las columnas numéricas esperadas para limpieza
         numeric_cols_to_clean = [
             'longitud', 'latitud', 'numero_etapas', 'numero_unidades', 'area_lote', 
             'area_construida', 'area_vendible', 'numero_bloques', 'total_parqueaderos', 
@@ -41,24 +41,23 @@ def load_data(url):
         for col in numeric_cols_to_clean:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
-                df[col] = df[col].fillna(df[col].mean()) 
+                df[col] = df[col].fillna(df[col].mean()) # Relleno con la media (Estrategia 2)
             
-        # Rellenar NaN en categóricas con 'N/A'
+        # Rellenar NaN en categóricas con 'N/A' (Estrategia 1)
         for col in df.select_dtypes(include=['object', 'category']).columns:
              df[col] = df[col].fillna('N/A')
              
         return df
     except Exception as e:
-        # Devolvemos un DF vacío o None para que el código posterior pueda detener la app
-        st.error(f"❌ Error al cargar el archivo. ¿Está 'openpyxl' en requirements.txt? Error: {e}")
+        st.error(f"❌ Error al cargar el archivo. Mensaje: {e}. ¿Revisaste requirements.txt?")
         return None
 
 # Intento de carga de datos
 df_raw = load_data(GITHUB_EXCEL_URL)
 
-# Verificamos si la carga fue exitosa
+# Verificación de carga
 if df_raw is None or df_raw.empty:
-    st.error("🚨 La aplicación no pudo cargar los datos y se ha detenido. Revise la consola para el error de carga.")
+    st.error("🚨 La aplicación no pudo cargar los datos y se ha detenido.")
     st.stop()
 else:
     st.success(f"✅ Archivo cargado. {df_raw.shape[0]} filas listas para K-Means.")
@@ -66,7 +65,7 @@ else:
 
 # --- 2. Definición de Variables (Dimensiones 1-7) ---
 
-# D1-D4
+# Variables Categóricas y Numéricas consolidadas de las 7 dimensiones
 location_categorical = ['regional', 'ciudad', 'zona', 'barrio', 'localidad_comuna', 'estrato']
 location_numerical = ['longitud', 'latitud']
 magnitude_numerical = [
@@ -80,17 +79,11 @@ quality_categorical = [
 ]
 amenities_columns = [col for col in df_raw.columns if col.startswith('zonacomun')]
 market_categorical = amenities_columns + ['marca', 'insumos', 'destino', 'uso_general']
-
-# D5: Atributos Transaccionales
 transactional_numerical = ['precioenmiles', 'preciomc', 'saldo', 'ventas', 'renuncias']
 transactional_categorical = ['fase', 'estado', 'modalidad'] 
-
-# D6: Características de Diseño
 design_numerical = ['area_por_tipo', 'alcobas', 'baños']
 design_categorical = ['uso', 'tipo_vivienda', 'nombre_tipo'] 
 dotaciones_categorical = [col for col in df_raw.columns if col.startswith('dotaciones_asociadas')] 
-
-# D7: Calidad y Lujo de Acabados
 finishes_categorical = [
     'condicion_entrega', 'meson_cocina', 'muebles_cocina', 
     'pisos_alcobas', 'pisos_baño', 'pisos_cocina', 
@@ -113,14 +106,14 @@ numerical_features = [col for col in numerical_features if col in df_raw.columns
 categorical_features = [col for col in categorical_features if col in df_raw.columns]
 
 st.info(
-    f"Se usarán **{len(numerical_features)}** variables numéricas y **{len(categorical_features)}** variables categóricas."
+    f"Se usarán **{len(numerical_features)}** variables numéricas (Estrategia 2) y **{len(categorical_features)}** variables categóricas (Estrategia 1)."
 )
 
 
-# --- 3. Pipeline de Preprocesamiento y Solución de Caching ---
+# --- 3. Pipeline de Preprocesamiento y Solución de Caching (Estrategia 1 y 2) ---
 
 def build_preprocessor(numerical_features, categorical_features):
-    """Construye y devuelve el ColumnTransformer."""
+    """Construye y devuelve el ColumnTransformer (OHE + Estandarización)."""
     numerical_transformer = Pipeline(steps=[
         ('scaler', StandardScaler())
     ])
@@ -138,66 +131,81 @@ def build_preprocessor(numerical_features, categorical_features):
 
 @st.cache_data(show_spinner="Aplicando preprocesamiento (Estandarización y OHE)...")
 def get_processed_data(df_data, num_cols, cat_cols):
-    """
-    Aplica el preprocesamiento a los datos.
-    Recibe listas de columnas (hashable) y reconstruye el preprocesador internamente.
-    """
+    """Resuelve el error de caching reconstruyendo el preprocesador internamente."""
     preprocessor_internal = build_preprocessor(num_cols, cat_cols)
     X_transformed = preprocessor_internal.fit_transform(df_data)
     
-    # Devolvemos la data transformada y el preprocesador entrenado (que no causa error porque no es el argumento)
+    # Devolvemos el preprocesador entrenado para posible interpretación futura, pero no es el argumento
     return X_transformed, preprocessor_internal 
 
-# LA LÍNEA CLAVE: Ahora df_raw, numerical_features y categorical_features están definidos.
+# Procesamos los datos (X_processed es la matriz NumPy lista para K-Means)
 X_processed, preprocessor_fitted = get_processed_data(df_raw, numerical_features, categorical_features) 
 
 
-# --- 4. Ejecución y Visualización del Clustering ---
+# --- 4. Ejecución y Visualización del Clustering (Estrategia 3 y 4) ---
 
-st.markdown("#### Paso 2: Evaluación y Entrenamiento del Modelo")
+st.markdown("#### Paso 2: Evaluación y Entrenamiento del Modelo (K-Means)")
 
-# 4.1. Método del Codo
-st.subheader("1. Determinación de K (Método del Codo)")
+# 4.1. Método del Codo con Detección Automática de K (Estrategia 3)
+st.subheader("1. Determinación Automática de K (Método del Codo)")
 k_range = st.slider("Selecciona el rango máximo de K a evaluar:", 2, 20, 10)
 
 def run_elbow_method(X_data, max_k):
-    """Calcula la Suma de Cuadrados Dentro del Clúster (WCSS) para diferentes K."""
+    """Calcula WCSS para K."""
     wcss = []
     k_values = range(1, max_k + 1)
     
-    with st.spinner(f"Calculando inercia para K de 1 a {max_k}. Esto puede tardar unos segundos..."):
+    with st.spinner(f"Calculando inercia para K de 1 a {max_k}..."):
         for k in k_values:
-            # Usamos n_init='auto' para el KMeans moderno
             kmeans = KMeans(n_clusters=k, random_state=42, n_init='auto', max_iter=300)
             kmeans.fit(X_data)
             wcss.append(kmeans.inertia_)
     
     return k_values, wcss
 
+def find_optimal_k(k_values, wcss):
+    """Heurística para encontrar el codo (punto de máxima inflexión)."""
+    if len(k_values) < 3: return 4
+    
+    # Calculamos la diferencia de las diferencias (segunda derivada), esto ayuda a encontrar el punto de inflexión.
+    # El punto con la mayor "desaceleración" en la caída es el codo.
+    diffs = np.diff(wcss)
+    
+    # Buscamos el índice donde la reducción es mínima (o la diferencia es máxima negativa)
+    k_suggested = np.argmin(diffs) + 1 
+    
+    # Aseguramos que K sea al menos 2
+    return max(2, k_suggested)
+
+
 k_values, wcss = run_elbow_method(X_processed, k_range)
+optimal_k_auto = find_optimal_k(k_values, wcss)
+
 
 col1, col2 = st.columns([2, 1])
 
 with col1:
     fig, ax = plt.subplots(figsize=(8, 4))
     ax.plot(k_values, wcss, 'bx-')
+    ax.vlines(optimal_k_auto, min(wcss), max(wcss), linestyles='--', colors='r', label=f'K Sugerido: {optimal_k_auto}')
     ax.set_xlabel("Número de Clústeres (K)")
     ax.set_ylabel("WCSS (Varianza Intra-Clúster)")
-    ax.set_title("Método del Codo: Elige el punto de inflexión")
+    ax.set_title("Método del Codo con Detección Automática")
+    ax.legend()
     st.pyplot(fig)
 
 with col2:
-    st.markdown("#### Elige K")
-    st.info("El 'codo' es donde la mejora al añadir un clúster se estanca.")
+    st.markdown("#### 🎯 K Sugerido")
+    st.info(f"El algoritmo sugiere un K de **{optimal_k_auto}**. ¡Puedes ajustarlo visualmente!")
     selected_k = st.number_input(
         "Número de Clústeres (K):", 
         min_value=2, 
         max_value=20, 
-        value=4, 
+        value=optimal_k_auto, 
         step=1
     )
 
-# 4.2. Ejecución de K-Means y Análisis
+# 4.2. Ejecución de K-Means y Análisis (Estrategia 4)
 
 if st.button(f"🚀 Ejecutar K-Means y Segmentar con K={selected_k}", type="primary"):
 
@@ -213,7 +221,7 @@ if st.button(f"🚀 Ejecutar K-Means y Segmentar con K={selected_k}", type="prim
     
     df_clustered = run_kmeans_clustering(X_processed, df_raw, selected_k)
     
-    st.success(f"Clustering completado. Se crearon **{selected_k} segmentos** de mercado.")
+    st.success(f"Clustering completado. Se crearon **{selected_k} segmentos** de mercado. ¡Listo para interpretar!")
 
     # A. Distribución y Perfiles (Visualización)
     st.subheader("2. Perfiles y Distribución de Clústeres")
@@ -225,6 +233,7 @@ if st.button(f"🚀 Ejecutar K-Means y Segmentar con K={selected_k}", type="prim
         cluster_counts = df_clustered['Cluster'].value_counts().sort_index()
         st.dataframe(cluster_counts.rename("N° Proyectos"))
 
+        # Análisis de Centroides Numéricos (Interpretación)
         all_numeric_cols = list(set(numerical_features) & set(df_clustered.columns))
         numeric_summary = df_clustered.groupby('Cluster')[all_numeric_cols].mean().T
         st.dataframe(
@@ -239,9 +248,9 @@ if st.button(f"🚀 Ejecutar K-Means y Segmentar con K={selected_k}", type="prim
                 df_clustered, 
                 x='longitud', 
                 y='latitud', 
-                color=df_clustered['Cluster'].astype(str), 
+                color=df_clustered['Cluster'].astype(str), # Convertir a string para color discreto
                 hover_data=['regional', 'estrato', 'precioenmiles'],
-                title=f"Segmentación de Proyectos (K={selected_k})",
+                title=f"Segmentación Geográfica (K={selected_k})",
                 template="streamlit"
             )
             st.plotly_chart(fig_map, use_container_width=True)
@@ -257,6 +266,7 @@ if st.button(f"🚀 Ejecutar K-Means y Segmentar con K={selected_k}", type="prim
     categorical_summary_dict = {}
     for col in key_categorical_summary:
         if col in df_clustered.columns:
+            # La Moda (el valor más frecuente) ayuda a definir el perfil de lujo/nicho
             modes = df_clustered.groupby('Cluster')[col].agg(lambda x: x.mode()[0] if not x.mode().empty else 'N/A')
             categorical_summary_dict[col] = modes
     
