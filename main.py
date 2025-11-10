@@ -26,9 +26,9 @@ GITHUB_EXCEL_DICT_URL = (
 st.sidebar.info(f"📚 El **Diccionario de Datos** está disponible en este [enlace de GitHub]({GITHUB_EXCEL_DICT_URL}).")
 
 
-# 1. Función para la carga del archivo (¡CON LÓGICA DE CHUNKS!)
+# 1. Función para la carga del archivo (¡CON LÓGICA DE CHUNKS Y SOLUCIÓN DE TIPOS!)
 def load_data(uploaded_file):
-    """Carga el archivo Parquet por lotes (chunks) para ahorrar memoria."""
+    """Carga el archivo Parquet por lotes (chunks) y asegura tipos flotantes."""
     
     # Lista de todas las columnas numéricas esperadas para limpieza
     numeric_cols_to_clean = [
@@ -45,7 +45,7 @@ def load_data(uploaded_file):
         uploaded_file.seek(0)
         file_buffer = BytesIO(file_bytes)
         
-        # 2. Abrir el archivo Parquet sin cargarlo completamente (lazy reading)
+        # 2. Abrir el archivo Parquet sin cargarlo completamente
         parquet_file = pq.ParquetFile(file_buffer)
         
         num_row_groups = parquet_file.num_row_groups
@@ -58,11 +58,16 @@ def load_data(uploaded_file):
             table = parquet_file.read_row_group(i)
             df_chunk = table.to_pandas()
             
-            # Aplicar la lógica de limpieza (Mapeo/Procesamiento del Chunk)
+            # Aplicar la lógica de limpieza y SOLUCIÓN DE TIPO (Map/Procesamiento del Chunk)
             for col in numeric_cols_to_clean:
                 if col in df_chunk.columns:
+                    # Forzar a numérico (convertir errores a NaN)
                     df_chunk[col] = pd.to_numeric(df_chunk[col], errors='coerce')
-                    # Usamos la media de la columna en el chunk.
+                    
+                    # 🛑 SOLUCIÓN CRÍTICA: Asegurar que la columna sea float64 para manejar decimales/NaNs
+                    df_chunk[col] = df_chunk[col].astype(np.float64) 
+                    
+                    # Rellenar NaNs con la media del CHUNK
                     df_chunk[col] = df_chunk[col].fillna(df_chunk[col].mean()) 
                 
             for col in df_chunk.select_dtypes(include=['object', 'category']).columns:
@@ -77,9 +82,7 @@ def load_data(uploaded_file):
         df_final = pd.concat(all_data, ignore_index=True)
         progress_bar.empty() # Borrar la barra
         
-        # 5. Volver a cachear el DataFrame final (para eficiencia en Streamlit)
-        # Usamos una función interna con caché para el resultado final, 
-        # ya que la función de lectura directa no puede ser cacheada.
+        # 5. Cachear el DataFrame final (para eficiencia en Streamlit)
         @st.cache_data
         def cache_final_df(df):
             return df
@@ -87,7 +90,6 @@ def load_data(uploaded_file):
         return cache_final_df(df_final)
         
     except Exception as e:
-        # Si falla, muestra el error de Python para que lo puedas diagnosticar
         st.error(f"❌ Falló el procesamiento por lotes del Parquet. Detalle: {e}")
         return None
 
@@ -106,7 +108,6 @@ if uploaded_file is not None:
         df_raw = load_data(uploaded_file)
 
     if df_raw is None or df_raw.empty:
-        # El error ya se mostró dentro de load_data
         st.stop()
     else:
         st.success(f"✅ Archivo Parquet cargado. {df_raw.shape[0]} filas listas para K-Means.")
@@ -163,7 +164,6 @@ if uploaded_file is not None:
         # --- 3. PIPELINE DE PREPROCESAMIENTO Y SOLUCIÓN DE CACHING ---
         # ----------------------------------------------------------------------------------
         
-        # Mantenemos el caché en el preprocesamiento de la matriz (X_processed) para eficiencia
         def build_preprocessor(numerical_features, categorical_features):
             """Construye y devuelve el ColumnTransformer."""
             numerical_transformer = Pipeline(steps=[
