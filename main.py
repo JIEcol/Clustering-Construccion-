@@ -9,25 +9,27 @@ from sklearn.pipeline import Pipeline
 from sklearn.cluster import KMeans
 import pyarrow.parquet as pq
 from io import BytesIO 
+import time # 🛑 NUEVA IMPORTACIÓN PARA MEDICIÓN DE TIEMPO
 
 import warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
 
-# --- Configuración de la App y Código Inicial (Se mantiene igual) ---
+# --- Configuración de la App ---
 
 st.set_page_config(layout="wide")
 st.title("🏗️ Análisis de Clustering (K-Means) de Proyectos de Construcción")
 st.markdown("---")
 
+# URL del Diccionario de Datos (Excel) como referencia en GitHub
 GITHUB_EXCEL_DICT_URL = (
     "https://github.com/JIEcol/Clustering-Construccion-/blob/main/Diccionario%20de%20datos%20CU%20sin%20estrategia.xlsx"
 )
 st.sidebar.info(f"📚 El **Diccionario de Datos** está disponible en este [enlace de GitHub]({GITHUB_EXCEL_DICT_URL}).")
 
 
-# 1. Función para la carga del archivo (¡CON SOLUCIÓN DE CATEGORICAL!)
+# 1. Función para la carga del archivo (¡CON TEMPORIZACIÓN Y MÉTRICAS!)
 def load_data(uploaded_file):
-    """Carga el archivo Parquet por lotes (chunks) y asegura tipos flotantes."""
+    """Carga el archivo Parquet por lotes (chunks) con métricas de tiempo."""
     
     numeric_cols_to_clean = [
         'longitud', 'latitud', 'numero_etapas', 'numero_unidades', 'area_lote', 
@@ -46,30 +48,59 @@ def load_data(uploaded_file):
         
         num_row_groups = parquet_file.num_row_groups
         all_data = []
-        progress_bar = st.progress(0, text="Cargando archivo por lotes...")
+        progress_bar = st.progress(0, text="Iniciando carga...")
+        
+        start_time = time.time() # 🛑 INICIO DE TEMPORIZADOR
         
         for i in range(num_row_groups):
+            
+            # --- LÓGICA DE TEMPORIZACIÓN ---
+            current_chunk_start_time = time.time()
+            
             table = parquet_file.read_row_group(i)
             df_chunk = table.to_pandas()
             
-            # Aplicar la lógica de limpieza y SOLUCIÓN DE TIPO
+            # Cálculo del tiempo estimado (solo después del primer chunk)
+            if i > 0:
+                elapsed_time = time.time() - start_time
+                time_per_chunk = elapsed_time / i
+                remaining_chunks = num_row_groups - (i + 1)
+                estimated_remaining_time = time_per_chunk * remaining_chunks
+                
+                # Formatear el tiempo restante
+                if estimated_remaining_time > 60:
+                    time_text = f"{estimated_remaining_time/60:.1f} min restantes"
+                else:
+                    time_text = f"{estimated_remaining_time:.1f} seg restantes"
+            else:
+                time_text = "Calculando..."
+
+            # --- LÓGICA DE LIMPIEZA Y SOLUCIÓN DE TIPO ---
             for col in numeric_cols_to_clean:
                 if col in df_chunk.columns:
                     df_chunk[col] = pd.to_numeric(df_chunk[col], errors='coerce')
                     df_chunk[col] = df_chunk[col].astype(np.float64) 
                     df_chunk[col] = df_chunk[col].fillna(df_chunk[col].mean()) 
                 
-            # 🛑 CORRECCIÓN CLAVE PARA CATEGORICAL
-            # Convertimos a tipo string ('object') antes de rellenar NaN con 'N/A'
             for col in df_chunk.select_dtypes(include=['object', 'category']).columns:
                 df_chunk[col] = df_chunk[col].astype(str).replace('nan', pd.NA, regex=False).fillna('N/A')
             
             all_data.append(df_chunk)
             
-            progress_bar.progress((i + 1) / num_row_groups, text=f"Procesando lote {i+1} de {num_row_groups}...")
+            # --- ACTUALIZACIÓN DEL PROGRESS BAR ---
+            percentage = (i + 1) / num_row_groups
+            progress_text = (
+                f"Cargando archivo por lotes... "
+                f"({percentage*100:.0f}%) | "
+                f"Lote {i+1} de {num_row_groups} | "
+                f"Tiempo estimado: {time_text}"
+            )
+            progress_bar.progress(percentage, text=progress_text)
+
 
         df_final = pd.concat(all_data, ignore_index=True)
         progress_bar.empty()
+        st.success(f"✅ Carga completa en {time.time() - start_time:.2f} segundos.")
         
         @st.cache_data
         def cache_final_df(df):
@@ -78,6 +109,7 @@ def load_data(uploaded_file):
         return cache_final_df(df_final)
         
     except Exception as e:
+        progress_bar.empty()
         st.error(f"❌ Falló el procesamiento por lotes del Parquet. Detalle: {e}")
         return None
 
@@ -91,7 +123,7 @@ uploaded_file = st.file_uploader(
 # 3. Lógica principal condicionada a la carga del archivo
 if uploaded_file is not None:
     
-    with st.spinner("Iniciando carga por lotes..."):
+    with st.spinner("Preparando carga por lotes..."):
         df_raw = load_data(uploaded_file)
 
     if df_raw is None or df_raw.empty:
@@ -100,10 +132,9 @@ if uploaded_file is not None:
         st.success(f"✅ Archivo Parquet cargado. {df_raw.shape[0]} filas listas para K-Means.")
 
         # ----------------------------------------------------------------------------------
-        # --- 2. DEFINICIÓN DE VARIABLES (Se mantiene igual) ---
+        # --- RESTO DEL CÓDIGO (PREPROCESAMIENTO Y CLUSTERING) SE MANTIENE IGUAL ---
         # ----------------------------------------------------------------------------------
 
-        # Variables Categóricas y Numéricas consolidadas de las 7 dimensiones
         location_categorical = ['regional', 'ciudad', 'zona', 'barrio', 'localidad_comuna', 'estrato']
         location_numerical = ['longitud', 'latitud']
         magnitude_numerical = [
@@ -128,7 +159,6 @@ if uploaded_file is not None:
             'puerta_principal', 'tipo_cocina'
         ]
 
-        # Consolidar listas finales
         numerical_features = (
             location_numerical + magnitude_numerical + 
             transactional_numerical + design_numerical
@@ -139,7 +169,6 @@ if uploaded_file is not None:
             finishes_categorical
         )
 
-        # Filtrar solo las columnas que realmente existen
         numerical_features = [col for col in numerical_features if col in df_raw.columns]
         categorical_features = [col for col in categorical_features if col in df_raw.columns]
 
@@ -148,11 +177,10 @@ if uploaded_file is not None:
         )
 
         # ----------------------------------------------------------------------------------
-        # --- 3. PIPELINE DE PREPROCESAMIENTO Y SOLUCIÓN DE CACHING (Se mantiene igual) ---
+        # --- 3. PIPELINE DE PREPROCESAMIENTO Y SOLUCIÓN DE CACHING ---
         # ----------------------------------------------------------------------------------
         
         def build_preprocessor(numerical_features, categorical_features):
-            """Construye y devuelve el ColumnTransformer."""
             numerical_transformer = Pipeline(steps=[
                 ('scaler', StandardScaler())
             ])
@@ -170,28 +198,24 @@ if uploaded_file is not None:
 
         @st.cache_data(show_spinner="Aplicando preprocesamiento (Estandarización y OHE)...")
         def get_processed_data(df_data, num_cols, cat_cols):
-            """Aplica el preprocesamiento, cacheando la matriz X_processed."""
             preprocessor_internal = build_preprocessor(num_cols, cat_cols)
             X_transformed = preprocessor_internal.fit_transform(df_data)
             
             return X_transformed, preprocessor_internal 
 
-        # Procesamos los datos
         X_processed, preprocessor_fitted = get_processed_data(df_raw, numerical_features, categorical_features) 
 
 
         # ----------------------------------------------------------------------------------
-        # --- 4. EJECUCIÓN Y VISUALIZACIÓN DEL CLUSTERING (Se mantiene igual) ---
+        # --- 4. EJECUCIÓN Y VISUALIZACIÓN DEL CLUSTERING ---
         # ----------------------------------------------------------------------------------
 
         st.markdown("#### Paso 2: Evaluación y Entrenamiento del Modelo (K-Means)")
 
-        # 4.1. Método del Codo con Detección Automática de K
         st.subheader("1. Determinación Automática de K (Método del Codo)")
         k_range = st.slider("Selecciona el rango máximo de K a evaluar:", 2, 20, 10)
 
         def run_elbow_method(X_data, max_k):
-            """Calcula WCSS para K."""
             wcss = []
             k_values = range(1, max_k + 1)
             
@@ -204,7 +228,6 @@ if uploaded_file is not None:
             return k_values, wcss
 
         def find_optimal_k(k_values, wcss):
-            """Heurística para encontrar el codo."""
             if len(k_values) < 3: return 4
             
             diffs = np.diff(wcss)
@@ -240,13 +263,10 @@ if uploaded_file is not None:
                 step=1
             )
 
-        # 4.2. Ejecución de K-Means y Análisis
-
         if st.button(f"🚀 Ejecutar K-Means y Segmentar con K={selected_k}", type="primary"):
 
             @st.cache_data(show_spinner=f"Entrenando K-Means con {selected_k} clústeres...")
             def run_kmeans_clustering(X_data, df_original, k):
-                """Ejecuta K-Means en los datos ya procesados y asigna etiquetas."""
                 kmeans = KMeans(n_clusters=k, random_state=42, n_init='auto', max_iter=300)
                 kmeans.fit(X_data) 
                 
@@ -258,7 +278,6 @@ if uploaded_file is not None:
             
             st.success(f"Clustering completado. Se crearon **{selected_k} segmentos** de mercado. ¡Listo para interpretar!")
 
-            # A. Distribución y Perfiles (Visualización)
             st.subheader("2. Perfiles y Distribución de Clústeres")
             
             col_dist, col_map = st.columns(2)
@@ -291,7 +310,6 @@ if uploaded_file is not None:
                 else:
                     st.warning("Faltan las columnas 'latitud' o 'longitud' para el mapa.")
                     
-            # Resumen Categórico
             st.markdown("#### C. Perfiles Categóricos Clave (Moda)")
             key_categorical_summary = [
                 'estrato', 'tipo_vivienda', 'condicion_entrega', 
@@ -309,7 +327,6 @@ if uploaded_file is not None:
                     caption="Valores más comunes (Moda) para entender el 'lujo' y el 'nicho' de cada clúster."
                 )
 
-            # D. Descargar los resultados
             st.markdown("---")
             csv = df_clustered.to_csv(index=False).encode('utf-8')
             st.download_button(
