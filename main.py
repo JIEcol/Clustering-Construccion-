@@ -24,13 +24,12 @@ GITHUB_EXCEL_DICT_URL = (
 st.sidebar.info(f"📚 El **Diccionario de Datos** está disponible en este [enlace de GitHub]({GITHUB_EXCEL_DICT_URL}).")
 
 
-# 1. Función para la carga del archivo (QUITAMOS @st.cache_data aquí temporalmente)
+# 1. Función para la carga del archivo (Sin caché para evitar conflictos con el FileUploader)
 def load_data(uploaded_file):
     """Carga los datos desde el archivo Parquet subido y realiza limpieza."""
     try:
-        # 🛑 SOLUCIÓN FINAL: Pasamos el objeto de Streamlit directamente a pd.read_parquet
-        # Esto le indica a Pandas que maneje el objeto de archivo de Streamlit internamente.
-        df = pd.read_parquet(uploaded_file)
+        # 🛑 ESTRATEGIA FINAL: Pasamos el objeto de Streamlit directamente a pd.read_parquet
+        df = pd.read_parquet(uploaded_file) 
         
         # Lista de todas las columnas numéricas esperadas para limpieza
         numeric_cols_to_clean = [
@@ -52,6 +51,7 @@ def load_data(uploaded_file):
              
         return df
     except Exception as e:
+        # Mostramos el error si la lectura falla
         st.error(f"❌ Falló la lectura del archivo Parquet. Detalle: {e}")
         return None
 
@@ -64,21 +64,19 @@ uploaded_file = st.file_uploader(
 
 # 3. Lógica principal condicionada a la carga del archivo
 if uploaded_file is not None:
-    # Mostramos el spinner mientras se ejecuta load_data (ya no tiene el caché)
+    # Usamos st.spinner para mostrar el estado de la carga
     with st.spinner("Cargando y limpiando datos..."):
         df_raw = load_data(uploaded_file)
 
     if df_raw is None or df_raw.empty:
-        # st.error ya se habrá llamado dentro de load_data
+        # st.error ya se llamó dentro de load_data
         st.stop()
     else:
         st.success(f"✅ Archivo Parquet cargado. {df_raw.shape[0]} filas listas para K-Means.")
 
         # ----------------------------------------------------------------------------------
-        # --- EL RESTO DEL CÓDIGO (Definición de Variables, Preprocesamiento, K-Means) ---
+        # --- 2. DEFINICIÓN DE VARIABLES ---
         # ----------------------------------------------------------------------------------
-        
-        # ... (Toda la definición de variables y lógica de K-Means que sigue se mantiene igual) ...
 
         # Variables Categóricas y Numéricas consolidadas de las 7 dimensiones
         location_categorical = ['regional', 'ciudad', 'zona', 'barrio', 'localidad_comuna', 'estrato']
@@ -124,9 +122,11 @@ if uploaded_file is not None:
             f"Se usarán **{len(numerical_features)}** variables numéricas (Estandarización) y **{len(categorical_features)}** variables categóricas (OHE)."
         )
 
+        # ----------------------------------------------------------------------------------
         # --- 3. PIPELINE DE PREPROCESAMIENTO Y SOLUCIÓN DE CACHING ---
+        # ----------------------------------------------------------------------------------
         
-        # Mantenemos las funciones de construcción del preprocesador y caching de datos procesados
+        # Mantenemos el caché en el preprocesamiento de la matriz (X_processed) para eficiencia
         def build_preprocessor(numerical_features, categorical_features):
             """Construye y devuelve el ColumnTransformer."""
             numerical_transformer = Pipeline(steps=[
@@ -152,7 +152,7 @@ if uploaded_file is not None:
             
             return X_transformed, preprocessor_internal 
 
-        # Procesamos los datos (Aquí es donde ocurre el caché principal)
+        # Procesamos los datos
         X_processed, preprocessor_fitted = get_processed_data(df_raw, numerical_features, categorical_features) 
 
 
