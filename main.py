@@ -7,30 +7,28 @@ from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.cluster import KMeans
-import pyarrow.parquet as pq # Importación clave para leer por lotes
+import pyarrow.parquet as pq
 from io import BytesIO 
 
 import warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
 
-# --- Configuración de la App ---
+# --- Configuración de la App y Código Inicial (Se mantiene igual) ---
 
 st.set_page_config(layout="wide")
 st.title("🏗️ Análisis de Clustering (K-Means) de Proyectos de Construcción")
 st.markdown("---")
 
-# URL del Diccionario de Datos (Excel) como referencia en GitHub
 GITHUB_EXCEL_DICT_URL = (
     "https://github.com/JIEcol/Clustering-Construccion-/blob/main/Diccionario%20de%20datos%20CU%20sin%20estrategia.xlsx"
 )
 st.sidebar.info(f"📚 El **Diccionario de Datos** está disponible en este [enlace de GitHub]({GITHUB_EXCEL_DICT_URL}).")
 
 
-# 1. Función para la carga del archivo (¡CON LÓGICA DE CHUNKS Y SOLUCIÓN DE TIPOS!)
+# 1. Función para la carga del archivo (¡CON SOLUCIÓN DE CATEGORICAL!)
 def load_data(uploaded_file):
     """Carga el archivo Parquet por lotes (chunks) y asegura tipos flotantes."""
     
-    # Lista de todas las columnas numéricas esperadas para limpieza
     numeric_cols_to_clean = [
         'longitud', 'latitud', 'numero_etapas', 'numero_unidades', 'area_lote', 
         'area_construida', 'area_vendible', 'numero_bloques', 'total_parqueaderos', 
@@ -40,49 +38,39 @@ def load_data(uploaded_file):
     ]
     
     try:
-        # 1. Preparar el buffer de bytes del archivo subido
         file_bytes = uploaded_file.read()
         uploaded_file.seek(0)
         file_buffer = BytesIO(file_bytes)
         
-        # 2. Abrir el archivo Parquet sin cargarlo completamente
         parquet_file = pq.ParquetFile(file_buffer)
         
         num_row_groups = parquet_file.num_row_groups
         all_data = []
         progress_bar = st.progress(0, text="Cargando archivo por lotes...")
         
-        # 3. Iterar sobre los Row Groups (chunks)
         for i in range(num_row_groups):
-            # Cargar un solo Row Group (Chunk) como un DataFrame de Pandas
             table = parquet_file.read_row_group(i)
             df_chunk = table.to_pandas()
             
-            # Aplicar la lógica de limpieza y SOLUCIÓN DE TIPO (Map/Procesamiento del Chunk)
+            # Aplicar la lógica de limpieza y SOLUCIÓN DE TIPO
             for col in numeric_cols_to_clean:
                 if col in df_chunk.columns:
-                    # Forzar a numérico (convertir errores a NaN)
                     df_chunk[col] = pd.to_numeric(df_chunk[col], errors='coerce')
-                    
-                    # 🛑 SOLUCIÓN CRÍTICA: Asegurar que la columna sea float64 para manejar decimales/NaNs
                     df_chunk[col] = df_chunk[col].astype(np.float64) 
-                    
-                    # Rellenar NaNs con la media del CHUNK
                     df_chunk[col] = df_chunk[col].fillna(df_chunk[col].mean()) 
                 
+            # 🛑 CORRECCIÓN CLAVE PARA CATEGORICAL
+            # Convertimos a tipo string ('object') antes de rellenar NaN con 'N/A'
             for col in df_chunk.select_dtypes(include=['object', 'category']).columns:
-                 df_chunk[col] = df_chunk[col].fillna('N/A')
+                df_chunk[col] = df_chunk[col].astype(str).replace('nan', pd.NA, regex=False).fillna('N/A')
             
             all_data.append(df_chunk)
             
-            # Actualizar la barra de progreso
             progress_bar.progress((i + 1) / num_row_groups, text=f"Procesando lote {i+1} de {num_row_groups}...")
 
-        # 4. Concatenar los resultados (Reduce/Combinación)
         df_final = pd.concat(all_data, ignore_index=True)
-        progress_bar.empty() # Borrar la barra
+        progress_bar.empty()
         
-        # 5. Cachear el DataFrame final (para eficiencia en Streamlit)
         @st.cache_data
         def cache_final_df(df):
             return df
@@ -103,7 +91,6 @@ uploaded_file = st.file_uploader(
 # 3. Lógica principal condicionada a la carga del archivo
 if uploaded_file is not None:
     
-    # Usamos st.spinner para mostrar el estado de la carga
     with st.spinner("Iniciando carga por lotes..."):
         df_raw = load_data(uploaded_file)
 
@@ -113,7 +100,7 @@ if uploaded_file is not None:
         st.success(f"✅ Archivo Parquet cargado. {df_raw.shape[0]} filas listas para K-Means.")
 
         # ----------------------------------------------------------------------------------
-        # --- 2. DEFINICIÓN DE VARIABLES ---
+        # --- 2. DEFINICIÓN DE VARIABLES (Se mantiene igual) ---
         # ----------------------------------------------------------------------------------
 
         # Variables Categóricas y Numéricas consolidadas de las 7 dimensiones
@@ -161,7 +148,7 @@ if uploaded_file is not None:
         )
 
         # ----------------------------------------------------------------------------------
-        # --- 3. PIPELINE DE PREPROCESAMIENTO Y SOLUCIÓN DE CACHING ---
+        # --- 3. PIPELINE DE PREPROCESAMIENTO Y SOLUCIÓN DE CACHING (Se mantiene igual) ---
         # ----------------------------------------------------------------------------------
         
         def build_preprocessor(numerical_features, categorical_features):
@@ -194,7 +181,7 @@ if uploaded_file is not None:
 
 
         # ----------------------------------------------------------------------------------
-        # --- 4. EJECUCIÓN Y VISUALIZACIÓN DEL CLUSTERING ---
+        # --- 4. EJECUCIÓN Y VISUALIZACIÓN DEL CLUSTERING (Se mantiene igual) ---
         # ----------------------------------------------------------------------------------
 
         st.markdown("#### Paso 2: Evaluación y Entrenamiento del Modelo (K-Means)")
