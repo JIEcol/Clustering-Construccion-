@@ -7,7 +7,6 @@ from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.cluster import KMeans
-from io import BytesIO # Importación CRÍTICA para leer el archivo subido
 
 import warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
@@ -25,18 +24,13 @@ GITHUB_EXCEL_DICT_URL = (
 st.sidebar.info(f"📚 El **Diccionario de Datos** está disponible en este [enlace de GitHub]({GITHUB_EXCEL_DICT_URL}).")
 
 
-# 1. Función para la carga del archivo (Robusta para Parquet subido)
-@st.cache_data(show_spinner="Cargando y limpiando datos...")
+# 1. Función para la carga del archivo (QUITAMOS @st.cache_data aquí temporalmente)
 def load_data(uploaded_file):
     """Carga los datos desde el archivo Parquet subido y realiza limpieza."""
     try:
-        # Leer el contenido binario del archivo subido y usar BytesIO para Pandas
-        file_bytes = uploaded_file.read()
-        
-        # Es CRÍTICO resetear el puntero para que st.cache_data pueda hashear correctamente
-        uploaded_file.seek(0)
-        
-        df = pd.read_parquet(BytesIO(file_bytes)) 
+        # 🛑 SOLUCIÓN FINAL: Pasamos el objeto de Streamlit directamente a pd.read_parquet
+        # Esto le indica a Pandas que maneje el objeto de archivo de Streamlit internamente.
+        df = pd.read_parquet(uploaded_file)
         
         # Lista de todas las columnas numéricas esperadas para limpieza
         numeric_cols_to_clean = [
@@ -70,16 +64,21 @@ uploaded_file = st.file_uploader(
 
 # 3. Lógica principal condicionada a la carga del archivo
 if uploaded_file is not None:
-    df_raw = load_data(uploaded_file)
+    # Mostramos el spinner mientras se ejecuta load_data (ya no tiene el caché)
+    with st.spinner("Cargando y limpiando datos..."):
+        df_raw = load_data(uploaded_file)
 
     if df_raw is None or df_raw.empty:
+        # st.error ya se habrá llamado dentro de load_data
         st.stop()
     else:
         st.success(f"✅ Archivo Parquet cargado. {df_raw.shape[0]} filas listas para K-Means.")
 
         # ----------------------------------------------------------------------------------
-        # --- 2. DEFINICIÓN DE VARIABLES ---
+        # --- EL RESTO DEL CÓDIGO (Definición de Variables, Preprocesamiento, K-Means) ---
         # ----------------------------------------------------------------------------------
+        
+        # ... (Toda la definición de variables y lógica de K-Means que sigue se mantiene igual) ...
 
         # Variables Categóricas y Numéricas consolidadas de las 7 dimensiones
         location_categorical = ['regional', 'ciudad', 'zona', 'barrio', 'localidad_comuna', 'estrato']
@@ -125,10 +124,9 @@ if uploaded_file is not None:
             f"Se usarán **{len(numerical_features)}** variables numéricas (Estandarización) y **{len(categorical_features)}** variables categóricas (OHE)."
         )
 
-        # ----------------------------------------------------------------------------------
         # --- 3. PIPELINE DE PREPROCESAMIENTO Y SOLUCIÓN DE CACHING ---
-        # ----------------------------------------------------------------------------------
-
+        
+        # Mantenemos las funciones de construcción del preprocesador y caching de datos procesados
         def build_preprocessor(numerical_features, categorical_features):
             """Construye y devuelve el ColumnTransformer."""
             numerical_transformer = Pipeline(steps=[
@@ -148,13 +146,13 @@ if uploaded_file is not None:
 
         @st.cache_data(show_spinner="Aplicando preprocesamiento (Estandarización y OHE)...")
         def get_processed_data(df_data, num_cols, cat_cols):
-            """Aplica el preprocesamiento, evitando el error de caching."""
+            """Aplica el preprocesamiento, cacheando la matriz X_processed."""
             preprocessor_internal = build_preprocessor(num_cols, cat_cols)
             X_transformed = preprocessor_internal.fit_transform(df_data)
             
             return X_transformed, preprocessor_internal 
 
-        # Procesamos los datos
+        # Procesamos los datos (Aquí es donde ocurre el caché principal)
         X_processed, preprocessor_fitted = get_processed_data(df_raw, numerical_features, categorical_features) 
 
 
