@@ -7,6 +7,7 @@ from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.cluster import KMeans
+from io import BytesIO # Importación CRÍTICA para leer el archivo subido
 
 import warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
@@ -17,19 +18,25 @@ st.set_page_config(layout="wide")
 st.title("🏗️ Análisis de Clustering (K-Means) de Proyectos de Construcción")
 st.markdown("---")
 
-# 🛑 CORRECCIÓN: URL del Diccionario de Datos (Excel)
+# URL del Diccionario de Datos (Excel) como referencia en GitHub
 GITHUB_EXCEL_DICT_URL = (
     "https://github.com/JIEcol/Clustering-Construccion-/blob/main/Diccionario%20de%20datos%20CU%20sin%20estrategia.xlsx"
 )
 st.sidebar.info(f"📚 El **Diccionario de Datos** está disponible en este [enlace de GitHub]({GITHUB_EXCEL_DICT_URL}).")
 
 
-# 1. Función para la carga del archivo
+# 1. Función para la carga del archivo (Robusta para Parquet subido)
 @st.cache_data(show_spinner="Cargando y limpiando datos...")
 def load_data(uploaded_file):
     """Carga los datos desde el archivo Parquet subido y realiza limpieza."""
     try:
-        df = pd.read_parquet(uploaded_file) 
+        # Leer el contenido binario del archivo subido y usar BytesIO para Pandas
+        file_bytes = uploaded_file.read()
+        
+        # Es CRÍTICO resetear el puntero para que st.cache_data pueda hashear correctamente
+        uploaded_file.seek(0)
+        
+        df = pd.read_parquet(BytesIO(file_bytes)) 
         
         # Lista de todas las columnas numéricas esperadas para limpieza
         numeric_cols_to_clean = [
@@ -51,7 +58,7 @@ def load_data(uploaded_file):
              
         return df
     except Exception as e:
-        st.error(f"❌ Error al procesar el archivo Parquet. Error: {e}")
+        st.error(f"❌ Falló la lectura del archivo Parquet. Detalle: {e}")
         return None
 
 # 2. El Uploader de archivos
@@ -65,7 +72,7 @@ uploaded_file = st.file_uploader(
 if uploaded_file is not None:
     df_raw = load_data(uploaded_file)
 
-    if df_raw is None:
+    if df_raw is None or df_raw.empty:
         st.stop()
     else:
         st.success(f"✅ Archivo Parquet cargado. {df_raw.shape[0]} filas listas para K-Means.")
