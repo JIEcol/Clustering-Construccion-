@@ -3,6 +3,6 @@ pandas
 openpyxl
 scikit-learn
 matplotlib
-Plotly 
+plotly  # Corregido: minúsculas y sin espacios
 kneed
 pyarrow
