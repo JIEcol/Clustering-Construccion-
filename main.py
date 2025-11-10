@@ -7,11 +7,13 @@ from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.cluster import KMeans
+import pyarrow.parquet as pq # Importación clave para leer por lotes
+from io import BytesIO 
 
 import warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
 
-# --- Configuración y Carga de Datos ---
+# --- Configuración de la App ---
 
 st.set_page_config(layout="wide")
 st.title("🏗️ Análisis de Clustering (K-Means) de Proyectos de Construcción")
@@ -24,35 +26,69 @@ GITHUB_EXCEL_DICT_URL = (
 st.sidebar.info(f"📚 El **Diccionario de Datos** está disponible en este [enlace de GitHub]({GITHUB_EXCEL_DICT_URL}).")
 
 
-# 1. Función para la carga del archivo (SIN @st.cache_data)
+# 1. Función para la carga del archivo (¡CON LÓGICA DE CHUNKS!)
 def load_data(uploaded_file):
-    """Carga los datos desde el archivo Parquet subido y realiza limpieza."""
+    """Carga el archivo Parquet por lotes (chunks) para ahorrar memoria."""
+    
+    # Lista de todas las columnas numéricas esperadas para limpieza
+    numeric_cols_to_clean = [
+        'longitud', 'latitud', 'numero_etapas', 'numero_unidades', 'area_lote', 
+        'area_construida', 'area_vendible', 'numero_bloques', 'total_parqueaderos', 
+        '#_parqueaderos_propietarios', '#_parqueaderos_visitantes',
+        'precioenmiles', 'preciomc', 'saldo', 'ventas', 'renuncias', 
+        'area_por_tipo', 'alcobas', 'baños'
+    ]
+    
     try:
-        # 🛑 ESTRATEGIA MÁS DIRECTA: Pasamos el objeto de Streamlit directamente.
-        # Esto reduce las operaciones de buffer y es la forma más ligera de cargar.
-        df = pd.read_parquet(uploaded_file) 
+        # 1. Preparar el buffer de bytes del archivo subido
+        file_bytes = uploaded_file.read()
+        uploaded_file.seek(0)
+        file_buffer = BytesIO(file_bytes)
         
-        # Lógica de limpieza (se mantiene igual)
-        numeric_cols_to_clean = [
-            'longitud', 'latitud', 'numero_etapas', 'numero_unidades', 'area_lote', 
-            'area_construida', 'area_vendible', 'numero_bloques', 'total_parqueaderos', 
-            '#_parqueaderos_propietarios', '#_parqueaderos_visitantes',
-            'precioenmiles', 'preciomc', 'saldo', 'ventas', 'renuncias', 
-            'area_por_tipo', 'alcobas', 'baños'
-        ]
+        # 2. Abrir el archivo Parquet sin cargarlo completamente (lazy reading)
+        parquet_file = pq.ParquetFile(file_buffer)
         
-        for col in numeric_cols_to_clean:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-                df[col] = df[col].fillna(df[col].mean()) 
+        num_row_groups = parquet_file.num_row_groups
+        all_data = []
+        progress_bar = st.progress(0, text="Cargando archivo por lotes...")
+        
+        # 3. Iterar sobre los Row Groups (chunks)
+        for i in range(num_row_groups):
+            # Cargar un solo Row Group (Chunk) como un DataFrame de Pandas
+            table = parquet_file.read_row_group(i)
+            df_chunk = table.to_pandas()
             
-        for col in df.select_dtypes(include=['object', 'category']).columns:
-             df[col] = df[col].fillna('N/A')
-             
-        return df
+            # Aplicar la lógica de limpieza (Mapeo/Procesamiento del Chunk)
+            for col in numeric_cols_to_clean:
+                if col in df_chunk.columns:
+                    df_chunk[col] = pd.to_numeric(df_chunk[col], errors='coerce')
+                    # Usamos la media de la columna en el chunk.
+                    df_chunk[col] = df_chunk[col].fillna(df_chunk[col].mean()) 
+                
+            for col in df_chunk.select_dtypes(include=['object', 'category']).columns:
+                 df_chunk[col] = df_chunk[col].fillna('N/A')
+            
+            all_data.append(df_chunk)
+            
+            # Actualizar la barra de progreso
+            progress_bar.progress((i + 1) / num_row_groups, text=f"Procesando lote {i+1} de {num_row_groups}...")
+
+        # 4. Concatenar los resultados (Reduce/Combinación)
+        df_final = pd.concat(all_data, ignore_index=True)
+        progress_bar.empty() # Borrar la barra
+        
+        # 5. Volver a cachear el DataFrame final (para eficiencia en Streamlit)
+        # Usamos una función interna con caché para el resultado final, 
+        # ya que la función de lectura directa no puede ser cacheada.
+        @st.cache_data
+        def cache_final_df(df):
+            return df
+        
+        return cache_final_df(df_final)
+        
     except Exception as e:
-        # Muestra el error de Python en la UI si falla
-        st.error(f"❌ Falló la lectura del archivo Parquet. Detalle: {e}")
+        # Si falla, muestra el error de Python para que lo puedas diagnosticar
+        st.error(f"❌ Falló el procesamiento por lotes del Parquet. Detalle: {e}")
         return None
 
 # 2. El Uploader de archivos
@@ -66,7 +102,7 @@ uploaded_file = st.file_uploader(
 if uploaded_file is not None:
     
     # Usamos st.spinner para mostrar el estado de la carga
-    with st.spinner("Cargando y limpiando datos..."):
+    with st.spinner("Iniciando carga por lotes..."):
         df_raw = load_data(uploaded_file)
 
     if df_raw is None or df_raw.empty:
