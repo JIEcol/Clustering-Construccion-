@@ -24,14 +24,15 @@ GITHUB_EXCEL_DICT_URL = (
 st.sidebar.info(f"📚 El **Diccionario de Datos** está disponible en este [enlace de GitHub]({GITHUB_EXCEL_DICT_URL}).")
 
 
-# 1. Función para la carga del archivo (Sin caché para evitar conflictos con el FileUploader)
+# 1. Función para la carga del archivo (SIN @st.cache_data)
 def load_data(uploaded_file):
     """Carga los datos desde el archivo Parquet subido y realiza limpieza."""
     try:
-        # 🛑 ESTRATEGIA FINAL: Pasamos el objeto de Streamlit directamente a pd.read_parquet
+        # 🛑 ESTRATEGIA MÁS DIRECTA: Pasamos el objeto de Streamlit directamente.
+        # Esto reduce las operaciones de buffer y es la forma más ligera de cargar.
         df = pd.read_parquet(uploaded_file) 
         
-        # Lista de todas las columnas numéricas esperadas para limpieza
+        # Lógica de limpieza (se mantiene igual)
         numeric_cols_to_clean = [
             'longitud', 'latitud', 'numero_etapas', 'numero_unidades', 'area_lote', 
             'area_construida', 'area_vendible', 'numero_bloques', 'total_parqueaderos', 
@@ -45,13 +46,12 @@ def load_data(uploaded_file):
                 df[col] = pd.to_numeric(df[col], errors='coerce')
                 df[col] = df[col].fillna(df[col].mean()) 
             
-        # Rellenar NaN en categóricas con 'N/A'
         for col in df.select_dtypes(include=['object', 'category']).columns:
              df[col] = df[col].fillna('N/A')
              
         return df
     except Exception as e:
-        # Mostramos el error si la lectura falla
+        # Muestra el error de Python en la UI si falla
         st.error(f"❌ Falló la lectura del archivo Parquet. Detalle: {e}")
         return None
 
@@ -64,12 +64,13 @@ uploaded_file = st.file_uploader(
 
 # 3. Lógica principal condicionada a la carga del archivo
 if uploaded_file is not None:
+    
     # Usamos st.spinner para mostrar el estado de la carga
     with st.spinner("Cargando y limpiando datos..."):
         df_raw = load_data(uploaded_file)
 
     if df_raw is None or df_raw.empty:
-        # st.error ya se llamó dentro de load_data
+        # El error ya se mostró dentro de load_data
         st.stop()
     else:
         st.success(f"✅ Archivo Parquet cargado. {df_raw.shape[0]} filas listas para K-Means.")
